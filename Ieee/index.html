@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>دخول اجتماع الشركة</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <style>
+    * { box-sizing: border-box; font-family: Tahoma, Arial, sans-serif; }
+    body { margin: 0; background: #0b1120; color: #f8fafc; }
+    .card { max-width: 420px; margin: 70px auto; background: #1e293b; padding: 26px; border-radius: 14px; box-shadow: 0 12px 30px rgba(0,0,0,.45); }
+    .card h2 { text-align: center; margin-top: 0; }
+    label { display: block; margin: 10px 0 5px; font-size: 13px; color: #cbd5e1; }
+    input[type="text"], input[type="email"] { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #fff; }
+    .btn-green { width: 100%; margin-top: 16px; padding: 12px; border: none; border-radius: 8px; background: #16a34a; color: #fff; font-weight: bold; cursor: pointer; font-size: 15px; }
+    .room-wrap { display: none; max-width: 1280px; margin: 16px auto; padding: 0 14px; }
+    .topbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; background: #1e293b; padding: 12px 16px; border-radius: 12px; margin-bottom: 14px; }
+    .grid { display: grid; grid-template-columns: 1fr 330px; gap: 14px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    .panel { background: #1e293b; border-radius: 12px; padding: 14px; }
+    .videos { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+    .tile { background: #0f172a; border-radius: 10px; padding: 8px; border: 1px solid #334155; }
+    video { width: 100%; border-radius: 8px; background: #000; max-height: 240px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px; }
+    button { border: none; border-radius: 8px; padding: 9px 14px; cursor: pointer; font-weight: bold; }
+    .btn-primary { background: #2563eb; color: #fff; }
+    .btn-warn { background: #eab308; color: #0f172a; }
+    .btn-danger { background: #dc2626; color: #fff; }
+    .chat-box { height: 260px; overflow-y: auto; background: #0f172a; border-radius: 8px; padding: 10px; margin-bottom: 10px; font-size: 13px; }
+    .chat-msg { margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #1e293b; }
+    .chat-form { display: flex; gap: 6px; }
+    .peer-item { display: flex; justify-content: space-between; align-items: center; background: #0f172a; padding: 8px 10px; border-radius: 8px; margin-bottom: 8px; font-size: 13px; }
+    .muted-tag { color: #f87171; font-size: 12px; }
+  </style>
+</head>
+<body>
+
+  <div id="loginScreen" class="card">
+    <h2>دخول اجتماع الشركة</h2>
+    <form id="quickJoinForm">
+      <label>الاسم الكامل</label>
+      <input type="text" id="empName" required placeholder="اكتب اسمك" />
+      <label>البريد الإلكتروني (الجيميل)</label>
+      <input type="email" id="empEmail" required placeholder="name@gmail.com" />
+      <button class="btn-green" type="submit">دخول الغرفة مباشرة</button>
+    </form>
+  </div>
+
+  <div id="roomScreen" class="room-wrap">
+    <div class="topbar">
+      <div>
+        <strong id="roomTitleLabel">الاجتماع</strong>
+        <span id="userBadge" style="margin-right:10px;color:#93c5fd;font-size:13px;"></span>
+      </div>
+      <div class="controls">
+        <button id="toggleMicBtn" class="btn-green" style="width:auto;margin-top:0;padding:9px 14px;font-size:13px;" onclick="toggleMyMic()">المايك: مفعل</button>
+        <button class="btn-primary" onclick="shareScreen()">مشاركة الشاشة</button>
+        <button id="muteAllBtn" class="btn-warn" style="display:none;" onclick="muteAllParticipants()">كتم مايك الجميع</button>
+        <button class="btn-danger" onclick="leaveRoom()">مغادرة الاجتماع</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="panel">
+        <h3>البث والمشاركات المرئية</h3>
+        <div id="videosGrid" class="videos"></div>
+      </div>
+
+      <div class="panel">
+        <h3>المشاركون والتحكم</h3>
+        <div id="participantsList"></div>
+
+        <h3 style="margin-top:16px;">الدردشة المباشرة</h3>
+        <div id="chatBox" class="chat-box"></div>
+        <form class="chat-form" onsubmit="sendChat(event)">
+          <input id="chatInput" type="text" placeholder="اكتب رسالة..." required />
+          <button class="btn-primary" type="submit">إرسال</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbykakAJxKnqYZ_2XT1X7csoJvo1zNAcFx6dBFwwQpNuZV2NNzJmacjGiLkZR8vAQluW4g/exec';
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomId = (urlParams.get('room') || 'company-main-room').replace(/[^a-zA-Z0-9_-]/g, '-');
+    const isHost = urlParams.get('host') === '1';
+
+    function pad(n) { return String(n).padStart(2, '0'); }
+    function formatTime(d) {
+      return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+    function formatDateTime(d) {
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + '-' + pad(d.getMinutes());
+    }
+
+    const meetingDateTimeLabel = formatDateTime(new Date());
+    document.getElementById('roomTitleLabel').textContent = 'غرفة: ' + roomId + ' (' + meetingDateTimeLabel + ')';
+    if (isHost) document.getElementById('muteAllBtn').style.display = 'inline-block';
+
+    const savedName = localStorage.getItem('company_meet_name') || '';
+    const savedEmail = localStorage.getItem('company_meet_email') || '';
+    if (savedName) document.getElementById('empName').value = savedName;
+    if (savedEmail) document.getElementById('empEmail').value = savedEmail;
+
+    let currentUser = { name: '', email: '', peerId: '' };
+    let localStream = null;
+    let screenStream = null;
+    let micEnabled = true;
+    let peer = null;
+    const dataConns = {};
+    const peersMeta = {};
+    let hasSentLeave = false;
+
+    document.getElementById('quickJoinForm').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      currentUser.name = document.getElementById('empName').value.trim();
+      currentUser.email = document.getElementById('empEmail').value.trim();
+      localStorage.setItem('company_meet_name', currentUser.name);
+      localStorage.setItem('company_meet_email', currentUser.email);
+
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('roomScreen').style.display = 'block';
+      document.getElementById('userBadge').textContent = currentUser.name + ' (' + currentUser.email + ')';
+
+      sendAttendanceEvent('join', {
+        meetingDateTime: meetingDateTimeLabel,
+        name: currentUser.name,
+        email: currentUser.email,
+        joinTime: formatTime(new Date())
+      });
+
+      await initMediaAndPeer();
+    });
+
+    function sendAttendanceEvent(action, extra) {
+      if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.indexOf('YOUR_') === 0) return;
+      fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        keepalive: true,
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(Object.assign({ action: action }, extra))
+      }).catch(() => {});
+    }
+
+    function notifyLeaveOnce() {
+      if (hasSentLeave || !currentUser.email) return;
+      hasSentLeave = true;
+      sendAttendanceEvent('leave', {
+        meetingDateTime: meetingDateTimeLabel,
+        name: currentUser.name,
+        email: currentUser.email,
+        leaveTime: formatTime(new Date())
+      });
+    }
+
+    window.addEventListener('beforeunload', notifyLeaveOnce);
+    window.addEventListener('pagehide', notifyLeaveOnce);
+
+    async function initMediaAndPeer() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      } catch (err) {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      }
+      addVideoTile('local', currentUser.name + ' (أنت)', localStream, true);
+
+      const hostPeerId = 'meet_' + roomId + '_host';
+      const myPeerId = isHost ? hostPeerId : ('meet_' + roomId + '_' + Math.random().toString(36).substring(2, 9));
+      currentUser.peerId = myPeerId;
+      peersMeta[myPeerId] = { name: currentUser.name, email: currentUser.email, micMuted: false };
+      renderParticipants();
+
+      peer = new Peer(myPeerId);
+      peer.on('open', () => {
+        if (!isHost) connectToPeer(hostPeerId);
+      });
+      peer.on('connection', (conn) => {
+        setupDataConnection(conn);
+        if (isHost) {
+          conn.on('open', () => conn.send({ type: 'peer_list', peers: peersMeta }));
+        }
+      });
+      peer.on('call', (call) => {
+        call.answer(localStream);
+        call.on('stream', (remoteStream) => {
+          const senderName = (call.metadata && call.metadata.name) || call.peer;
+          addVideoTile(call.peer, senderName, remoteStream, false);
+        });
+      });
+    }
+
+    function connectToPeer(targetPeerId) {
+      if (!targetPeerId || targetPeerId === currentUser.peerId || dataConns[targetPeerId]) return;
+      const conn = peer.connect(targetPeerId);
+      setupDataConnection(conn);
+      conn.on('open', () => {
+        conn.send({
+          type: 'hello',
+          peerId: currentUser.peerId,
+          name: currentUser.name,
+          email: currentUser.email,
+          micMuted: !micEnabled
+        });
+        const call = peer.call(targetPeerId, localStream, { metadata: { name: currentUser.name } });
+        call.on('stream', (remoteStream) => {
+          const senderName = (peersMeta[targetPeerId] && peersMeta[targetPeerId].name) || targetPeerId;
+          addVideoTile(targetPeerId, senderName, remoteStream, false);
+        });
+      });
+    }
+
+    function setupDataConnection(conn) {
+      dataConns[conn.peer] = conn;
+      conn.on('data', (msg) => {
+        if (!msg || !msg.type) return;
+        if (msg.type === 'hello') {
+          peersMeta[msg.peerId] = { name: msg.name, email: msg.email, micMuted: !!msg.micMuted };
+          renderParticipants();
+          if (isHost) {
+            Object.keys(peersMeta).forEach(existingId => {
+              if (existingId !== msg.peerId && existingId !== currentUser.peerId && dataConns[msg.peerId]) {
+                dataConns[msg.peerId].send({ type: 'connect_to', targetPeerId: existingId });
+              }
+            });
+          }
+        } else if (msg.type === 'peer_list') {
+          Object.assign(peersMeta, msg.peers || {});
+          renderParticipants();
+          Object.keys(peersMeta).forEach(pid => connectToPeer(pid));
+        } else if (msg.type === 'connect_to') {
+          connectToPeer(msg.targetPeerId);
+        } else if (msg.type === 'chat') {
+          appendChat(msg.sender, msg.text);
+        } else if (msg.type === 'force_mute') {
+          if (msg.targetPeerId === currentUser.peerId || msg.targetPeerId === 'ALL') {
+            setMicState(false);
+            appendChat('النظام', 'قام المضيف بكتم المايك.');
+          }
+        } else if (msg.type === 'mic_status') {
+          if (peersMeta[msg.peerId]) {
+            peersMeta[msg.peerId].micMuted = !!msg.muted;
+            renderParticipants();
+          }
+        }
+      });
+      conn.on('close', () => {
+        delete dataConns[conn.peer];
+        delete peersMeta[conn.peer];
+        const tile = document.getElementById('tile_' + conn.peer);
+        if (tile) tile.remove();
+        renderParticipants();
+      });
+    }
+
+    function addVideoTile(id, label, stream, muted) {
+      let tile = document.getElementById('tile_' + id);
+      if (!tile) {
+        tile = document.createElement('div');
+        tile.id = 'tile_' + id;
+        tile.className = 'tile';
+        const vid = document.createElement('video');
+        vid.autoplay = true;
+        vid.playsInline = true;
+        vid.muted = !!muted;
+        const cap = document.createElement('div');
+        cap.style.marginTop = '6px';
+        cap.style.fontSize = '13px';
+        cap.textContent = label;
+        tile.appendChild(vid);
+        tile.appendChild(cap);
+        document.getElementById('videosGrid').appendChild(tile);
+      }
+      tile.querySelector('video').srcObject = stream;
+    }
+
+    function setMicState(enable) {
+      micEnabled = enable;
+      if (localStream) localStream.getAudioTracks().forEach(t => t.enabled = enable);
+      const btn = document.getElementById('toggleMicBtn');
+      btn.textContent = enable ? 'المايك: مفعل' : 'المايك: مكتوم';
+      btn.style.background = enable ? '#16a34a' : '#dc2626';
+      if (peersMeta[currentUser.peerId]) peersMeta[currentUser.peerId].micMuted = !enable;
+      broadcastData({ type: 'mic_status', peerId: currentUser.peerId, muted: !enable });
+      renderParticipants();
+    }
+
+    function toggleMyMic() { setMicState(!micEnabled); }
+
+    async function shareScreen() {
+      try {
+        screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        addVideoTile('screen_' + currentUser.peerId, 'شاشة ' + currentUser.name, screenStream, true);
+        const screenTrack = screenStream.getVideoTracks()[0];
+        Object.keys(peer.connections || {}).forEach(remoteId => {
+          (peer.connections[remoteId] || []).forEach(pcWrap => {
+            if (pcWrap.peerConnection) {
+              const sender = pcWrap.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+              if (sender && screenTrack) sender.replaceTrack(screenTrack);
+            }
+          });
+        });
+        screenTrack.onended = () => {
+          const camTrack = localStream && localStream.getVideoTracks()[0];
+          Object.keys(peer.connections || {}).forEach(remoteId => {
+            (peer.connections[remoteId] || []).forEach(pcWrap => {
+              if (pcWrap.peerConnection) {
+                const sender = pcWrap.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+                if (sender && camTrack) sender.replaceTrack(camTrack);
+              }
+            });
+          });
+          const sTile = document.getElementById('tile_screen_' + currentUser.peerId);
+          if (sTile) sTile.remove();
+        };
+      } catch (e) {}
+    }
+
+    function hostMutePeer(targetPeerId) {
+      if (!isHost) return;
+      if (targetPeerId === currentUser.peerId) setMicState(false);
+      else if (dataConns[targetPeerId]) dataConns[targetPeerId].send({ type: 'force_mute', targetPeerId });
+    }
+
+    function muteAllParticipants() {
+      if (!isHost) return;
+      setMicState(false);
+      broadcastData({ type: 'force_mute', targetPeerId: 'ALL' });
+    }
+
+    function broadcastData(obj) {
+      Object.values(dataConns).forEach(c => { if (c.open) c.send(obj); });
+    }
+
+    function sendChat(e) {
+      e.preventDefault();
+      const input = document.getElementById('chatInput');
+      const text = input.value.trim();
+      if (!text) return;
+      appendChat(currentUser.name, text);
+      broadcastData({ type: 'chat', sender: currentUser.name, text });
+      input.value = '';
+    }
+
+    function appendChat(sender, text) {
+      const box = document.getElementById('chatBox');
+      const div = document.createElement('div');
+      div.className = 'chat-msg';
+      div.innerHTML = '<strong>' + escapeHtml(sender) + ':</strong> ' + escapeHtml(text);
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function renderParticipants() {
+      const list = document.getElementById('participantsList');
+      list.innerHTML = '';
+      Object.keys(peersMeta).forEach(pid => {
+        const p = peersMeta[pid];
+        const row = document.createElement('div');
+        row.className = 'peer-item';
+        const info = document.createElement('div');
+        info.innerHTML = '<div><strong>' + escapeHtml(p.name) + '</strong></div>' +
+          '<div style="font-size:11px;color:#94a3b8;">' + escapeHtml(p.email || '') + '</div>' +
+          (p.micMuted ? '<span class="muted-tag">المايك مكتوم</span>' : '');
+        row.appendChild(info);
+
+        if (isHost) {
+          const btn = document.createElement('button');
+          btn.className = 'btn-warn';
+          btn.style.padding = '5px 9px';
+          btn.style.fontSize = '12px';
+          btn.textContent = 'كتم المايك';
+          btn.onclick = () => hostMutePeer(pid);
+          row.appendChild(btn);
+        }
+        list.appendChild(row);
+      });
+    }
+
+    function leaveRoom() {
+      notifyLeaveOnce();
+      if (localStream) localStream.getTracks().forEach(t => t.stop());
+      if (screenStream) screenStream.getTracks().forEach(t => t.stop());
+      if (peer) peer.destroy();
+      window.location.reload();
+    }
+  </script>
+</body>
+</html>
